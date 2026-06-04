@@ -22,6 +22,7 @@ class CompressorApp(ctk.CTk):
 
         self.video_info: Optional[VideoInfo] = None
         self.encoder = Encoder()
+        self._output_folder: Optional[str] = None
 
         self._build_ui()
 
@@ -193,19 +194,16 @@ class CompressorApp(ctk.CTk):
         if not self.video_info:
             return
         stem = Path(self.video_info.path).stem
-        folder = Path(self.video_info.path).parent
+        folder = Path(self._output_folder) if self._output_folder else Path(self.video_info.path).parent
         target = self.target_var.get()
         suffix = f"_{target}mb" if target != "custom" else "_compressed"
         self.output_path.set(str(folder / f"{stem}{suffix}.mp4"))
 
     def _browse_output(self):
-        path = filedialog.asksaveasfilename(
-            title="Save As",
-            defaultextension=".mp4",
-            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")],
-        )
-        if path:
-            self.output_path.set(path)
+        folder = filedialog.askdirectory(title="Select Output Folder")
+        if folder:
+            self._output_folder = folder
+            self._auto_output_path()
 
     def _on_target_change(self):
         is_custom = self.target_var.get() == "custom"
