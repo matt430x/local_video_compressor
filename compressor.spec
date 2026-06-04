@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files
 datas = collect_data_files('customtkinter')
 
 a = Analysis(
-    ['compressor.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=datas,

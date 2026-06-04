@@ -1,77 +1,16 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
-import subprocess
-import threading
-import os
-import re
-import json
 from pathlib import Path
-from dataclasses import dataclass
 from typing import Optional
+
+from video import VideoInfo, probe_video
+from encoder import Encoder, ffmpeg_available, calculate_video_bitrate
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 DISCORD_PRESETS = [("8 MB", 8), ("50 MB", 50), ("100 MB", 100)]
-
-
-@dataclass
-class VideoInfo:
-    path: str
-    duration: float
-    width: int
-    height: int
-    fps: float
-    size_bytes: int
-    has_audio: bool
-
-
-def probe_video(path: str) -> VideoInfo:
-    cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
-        "-show_streams", "-show_format", path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr)
-    data = json.loads(result.stdout)
-
-    duration = float(data["format"]["duration"])
-    size = int(data["format"]["size"])
-
-    video_stream = next(s for s in data["streams"] if s["codec_type"] == "video")
-    has_audio = any(s["codec_type"] == "audio" for s in data["streams"])
-
-    fps_str = video_stream.get("r_frame_rate", "30/1")
-    num, den = fps_str.split("/")
-    fps = float(num) / float(den) if float(den) != 0 else 30.0
-
-    return VideoInfo(
-        path=path,
-        duration=duration,
-        width=int(video_stream["width"]),
-        height=int(video_stream["height"]),
-        fps=fps,
-        size_bytes=size,
-        has_audio=has_audio,
-    )
-
-
-def calculate_video_bitrate(target_mb: float, duration: float, audio_kbps: int, include_audio: bool) -> int:
-    # 2% headroom so the output reliably stays under the limit
-    target_bits = target_mb * 1024 * 1024 * 8 * 0.98
-    audio_bits = (audio_kbps * 1000 * duration) if include_audio else 0
-    video_kbps = max(1, int((target_bits - audio_bits) / duration / 1000))
-    return video_kbps
-
-
-def ffmpeg_available() -> bool:
-    try:
-        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True)
-        return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
 
 
 class CompressorApp(ctk.CTk):
@@ -82,8 +21,7 @@ class CompressorApp(ctk.CTk):
         self.resizable(False, False)
 
         self.video_info: Optional[VideoInfo] = None
-        self.cancel_flag = threading.Event()
-        self.process: Optional[subprocess.Popen] = None
+        self.encoder = Encoder()
 
         self._build_ui()
 
@@ -213,7 +151,7 @@ class CompressorApp(ctk.CTk):
 
         self.cancel_btn = ctk.CTkButton(
             btn_row, text="Cancel", width=100, height=42,
-            fg_color="#555", hover_color="#444", command=self._cancel, state="disabled",
+            fg_color="#555", hover_color="#444", command=self.encoder.cancel, state="disabled",
         )
         self.cancel_btn.pack(side="left", padx=(12, 0))
 
@@ -281,9 +219,10 @@ class CompressorApp(ctk.CTk):
         target_mb = self._get_target_mb()
         if target_mb is None:
             return
-        include_audio = self.audio_var.get()
-        audio_kbps = int(self.audio_bitrate_var.get())
-        vbr = calculate_video_bitrate(target_mb, self.video_info.duration, audio_kbps, include_audio)
+        vbr = calculate_video_bitrate(
+            target_mb, self.video_info.duration,
+            int(self.audio_bitrate_var.get()), self.audio_var.get(),
+        )
         self.bitrate_label.configure(text=f"Estimated video bitrate: {vbr} kbps")
 
     def _get_target_mb(self) -> Optional[float]:
@@ -323,92 +262,25 @@ class CompressorApp(ctk.CTk):
             )
             return
 
-        self.cancel_flag.clear()
         self.compress_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.progress_bar.set(0)
 
-        t = threading.Thread(
-            target=self._compress,
-            args=(self.video_info.path, output, vbr, audio_kbps if include_audio else 0, self.video_info.duration),
-            daemon=True,
+        self.encoder.start(
+            src=self.video_info.path,
+            dst=output,
+            vbr=vbr,
+            abr=audio_kbps if include_audio else 0,
+            duration=self.video_info.duration,
+            on_progress=lambda p: self.after(0, lambda: self.progress_bar.set(p)),
+            on_status=lambda s: self.after(0, lambda: self.status_label.configure(text=s)),
+            on_done=lambda path, mb: self.after(0, lambda: (
+                self.progress_bar.set(1.0),
+                messagebox.showinfo("Done", f"Output: {mb:.2f} MB\n\n{path}"),
+            )),
+            on_finished=lambda: self.after(0, self._on_compression_finished),
         )
-        t.start()
 
-    def _compress(self, src: str, dst: str, vbr: int, abr: int, duration: float):
-        passlog = str(Path(dst).parent / "ffmpeg2pass")
-        try:
-            self._set_status("Pass 1 / 2  —  Analyzing…")
-
-            pass1 = [
-                "ffmpeg", "-y", "-i", src,
-                "-c:v", "libx264", "-b:v", f"{vbr}k",
-                "-pass", "1", "-passlogfile", passlog,
-                "-an", "-f", "null", "NUL",
-            ]
-            if not self._run_ffmpeg(pass1, duration, 0.0, 0.5):
-                return
-
-            self._set_status("Pass 2 / 2  —  Encoding…")
-
-            pass2 = [
-                "ffmpeg", "-y", "-i", src,
-                "-c:v", "libx264", "-b:v", f"{vbr}k",
-                "-pass", "2", "-passlogfile", passlog,
-            ]
-            pass2 += ["-c:a", "aac", "-b:a", f"{abr}k"] if abr > 0 else ["-an"]
-            pass2.append(dst)
-
-            if not self._run_ffmpeg(pass2, duration, 0.5, 1.0):
-                return
-
-            final_mb = os.path.getsize(dst) / 1024 / 1024
-            self._set_status(f"Done  —  {final_mb:.2f} MB saved to {Path(dst).name}")
-            self.after(0, lambda: self.progress_bar.set(1.0))
-            self.after(0, lambda: messagebox.showinfo("Done", f"Output: {final_mb:.2f} MB\n\n{dst}"))
-
-        except Exception as e:
-            self._set_status(f"Error: {e}")
-        finally:
-            for f in Path(dst).parent.glob("ffmpeg2pass*"):
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
-            self.after(0, lambda: self.compress_btn.configure(state="normal"))
-            self.after(0, lambda: self.cancel_btn.configure(state="disabled"))
-
-    def _run_ffmpeg(self, cmd: list, duration: float, p_start: float, p_end: float) -> bool:
-        self.process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-        time_re = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
-
-        for line in self.process.stderr:
-            if self.cancel_flag.is_set():
-                self.process.terminate()
-                self._set_status("Cancelled.")
-                return False
-            m = time_re.search(line)
-            if m:
-                elapsed = float(m.group(1)) * 3600 + float(m.group(2)) * 60 + float(m.group(3))
-                frac = min(1.0, elapsed / duration)
-                p = p_start + frac * (p_end - p_start)
-                self.after(0, lambda v=p: self.progress_bar.set(v))
-
-        self.process.wait()
-        return self.process.returncode == 0
-
-    def _cancel(self):
-        self.cancel_flag.set()
-        if self.process:
-            try:
-                self.process.terminate()
-            except OSError:
-                pass
-
-    def _set_status(self, text: str):
-        self.after(0, lambda: self.status_label.configure(text=text))
-
-
-if __name__ == "__main__":
-    app = CompressorApp()
-    app.mainloop()
+    def _on_compression_finished(self):
+        self.compress_btn.configure(state="normal")
+        self.cancel_btn.configure(state="disabled")
