@@ -203,7 +203,10 @@ class CompressorApp(ctk.CTk):
         folder = filedialog.askdirectory(title="Select Output Folder")
         if folder:
             self._output_folder = folder
-            self._auto_output_path()
+            if self.video_info:
+                self._auto_output_path()
+            else:
+                self.output_path.set(folder)
 
     def _on_target_change(self):
         is_custom = self.target_var.get() == "custom"
