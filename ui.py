@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -17,12 +18,15 @@ class CompressorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Discord Video Compressor")
-        self.geometry("720x680")
+        self.geometry("720x740")
         self.resizable(False, False)
 
         self.video_info: Optional[VideoInfo] = None
         self.encoder = Encoder()
         self._output_folder: Optional[str] = None
+        self._probing = False
+        self._probe_anim_value = 0.0
+        self._probe_anim_dir = 1
 
         self._build_ui()
 
@@ -63,7 +67,10 @@ class CompressorApp(ctk.CTk):
         ctk.CTkButton(header, text="Browse", width=90, height=30, command=self._browse_input).pack(side="right")
 
         self.input_label = ctk.CTkLabel(frame, text="No file selected", text_color="#888", anchor="w", wraplength=660)
-        self.input_label.pack(anchor="w", padx=14, pady=(0, 12))
+        self.input_label.pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.probe_bar = ctk.CTkProgressBar(frame, height=6)
+        self.probe_bar.set(0)
 
     def _build_info_section(self, parent):
         self.info_frame = ctk.CTkFrame(parent, corner_radius=8)
@@ -168,13 +175,35 @@ class CompressorApp(ctk.CTk):
 
     def _load_video(self, path: str):
         self.status_label.configure(text="Reading video info…")
-        self.update()
-        try:
-            info = probe_video(path)
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not read video:\n{e}")
-            self.status_label.configure(text="Ready")
+        self._probing = True
+        self._probe_anim_value = 0.0
+        self._probe_anim_dir = 1
+        self.probe_bar.pack(fill="x", padx=14, pady=(0, 12), after=self.input_label)
+        self._animate_probe()
+
+        def _probe():
+            try:
+                info = probe_video(path)
+                self.after(0, lambda: self._on_probe_done(path, info))
+            except Exception as e:
+                self.after(0, lambda: self._on_probe_error(str(e)))
+
+        threading.Thread(target=_probe, daemon=True).start()
+
+    def _animate_probe(self):
+        if not self._probing:
             return
+        self._probe_anim_value += self._probe_anim_dir * 0.04
+        if self._probe_anim_value >= 1.0:
+            self._probe_anim_dir = -1
+        elif self._probe_anim_value <= 0.0:
+            self._probe_anim_dir = 1
+        self.probe_bar.set(max(0.0, min(1.0, self._probe_anim_value)))
+        self.after(30, self._animate_probe)
+
+    def _on_probe_done(self, path: str, info):
+        self._probing = False
+        self.probe_bar.pack_forget()
 
         self.video_info = info
         self.input_label.configure(text=path, text_color="white")
@@ -189,6 +218,12 @@ class CompressorApp(ctk.CTk):
         self._auto_output_path()
         self._update_bitrate_label()
         self.status_label.configure(text="Ready")
+
+    def _on_probe_error(self, error: str):
+        self._probing = False
+        self.probe_bar.pack_forget()
+        self.status_label.configure(text="Ready")
+        messagebox.showerror("Error", f"Could not read video:\n{error}")
 
     def _auto_output_path(self):
         if not self.video_info:
@@ -275,10 +310,7 @@ class CompressorApp(ctk.CTk):
             duration=self.video_info.duration,
             on_progress=lambda p: self.after(0, lambda: self.progress_bar.set(p)),
             on_status=lambda s: self.after(0, lambda: self.status_label.configure(text=s)),
-            on_done=lambda path, mb: self.after(0, lambda: (
-                self.progress_bar.set(1.0),
-                messagebox.showinfo("Done", f"Output: {mb:.2f} MB\n\n{path}"),
-            )),
+            on_done=lambda path, kb: self.after(0, lambda: self.progress_bar.set(1.0)),
             on_finished=lambda: self.after(0, self._on_compression_finished),
         )
 

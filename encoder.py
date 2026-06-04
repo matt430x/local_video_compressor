@@ -8,15 +8,16 @@ from typing import Callable, Optional
 
 def ffmpeg_available() -> bool:
     try:
-        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True)
+        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         return False
 
 
 def calculate_video_bitrate(target_mb: float, duration: float, audio_kbps: int, include_audio: bool) -> int:
-    # 2% headroom so the output reliably stays under the limit
-    target_bits = target_mb * 1024 * 1024 * 8 * 0.98
+    # 10% headroom — two-pass CBR routinely overshoots by 5-15% due to
+    # I-frame overhead, minimum quantizer limits, and container overhead
+    target_bits = target_mb * 1024 * 1024 * 8 * 0.90
     audio_bits = (audio_kbps * 1000 * duration) if include_audio else 0
     return max(1, int((target_bits - audio_bits) / duration / 1000))
 
@@ -60,6 +61,7 @@ class Encoder:
             pass1 = [
                 "ffmpeg", "-y", "-i", src,
                 "-c:v", "libx264", "-b:v", f"{vbr}k",
+                "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
                 "-pass", "1", "-passlogfile", passlog,
                 "-an", "-f", "null", "NUL",
             ]
@@ -70,6 +72,7 @@ class Encoder:
             pass2 = [
                 "ffmpeg", "-y", "-i", src,
                 "-c:v", "libx264", "-b:v", f"{vbr}k",
+                "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
                 "-pass", "2", "-passlogfile", passlog,
             ]
             pass2 += ["-c:a", "aac", "-b:a", f"{abr}k"] if abr > 0 else ["-an"]
@@ -77,9 +80,10 @@ class Encoder:
             if not self._run_ffmpeg(pass2, duration, 0.5, 1.0, on_progress, on_status):
                 return
 
-            size_mb = os.path.getsize(dst) / 1024 / 1024
-            on_status(f"Done  —  {size_mb:.2f} MB saved to {Path(dst).name}")
-            on_done(dst, size_mb)
+            size_bytes = os.path.getsize(dst)
+            size_kb = round(size_bytes / 1024)
+            on_status(f"Done  —  {size_kb:,} KB saved to {dst}")
+            on_done(dst, size_kb)
 
         except Exception as e:
             on_status(f"Error: {e}")
@@ -93,7 +97,8 @@ class Encoder:
 
     def _run_ffmpeg(self, cmd, duration, p_start, p_end, on_progress, on_status) -> bool:
         self._process = subprocess.Popen(
-            cmd, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace"
+            cmd, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         time_re = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
 

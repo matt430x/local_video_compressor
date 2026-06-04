@@ -19,7 +19,7 @@ def probe_video(path: str) -> VideoInfo:
         "ffprobe", "-v", "quiet", "-print_format", "json",
         "-show_streams", "-show_format", path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
     if result.returncode != 0:
         raise RuntimeError(result.stderr)
     data = json.loads(result.stdout)
