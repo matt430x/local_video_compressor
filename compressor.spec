@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 
-datas = collect_data_files('customtkinter')
+datas = collect_data_files('customtkinter') + collect_data_files('tkinterdnd2')
 
 a = Analysis(
     ['main.py'],
