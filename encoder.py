@@ -8,15 +8,16 @@ from typing import Callable, Optional
 
 def ffmpeg_available() -> bool:
     try:
-        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         return False
 
 
-def calculate_video_bitrate(target_mb: float, duration: float, audio_kbps: int, include_audio: bool) -> int:
-    # 10% headroom — two-pass CBR routinely overshoots by 5-15% due to
-    # I-frame overhead, minimum quantizer limits, and container overhead
+def calculate_video_bitrate(target_mb: float, duration: float, audio_kbps: int,
+                             include_audio: bool) -> int:
+    # 10% headroom — two-pass CBR routinely overshoots by 5-15%
     target_bits = target_mb * 1024 * 1024 * 8 * 0.90
     audio_bits = (audio_kbps * 1000 * duration) if include_audio else 0
     return max(1, int((target_bits - audio_bits) / duration / 1000))
@@ -38,11 +39,15 @@ class Encoder:
         on_status: Callable[[str], None],
         on_done: Callable[[str, float], None],
         on_finished: Callable[[], None],
+        start_time: float = 0.0,
+        end_time: Optional[float] = None,
+        volume_db: float = 0.0,
     ):
         self._cancel_flag.clear()
         threading.Thread(
             target=self._compress,
-            args=(src, dst, vbr, abr, duration, on_progress, on_status, on_done, on_finished),
+            args=(src, dst, vbr, abr, duration, on_progress, on_status, on_done,
+                  on_finished, start_time, end_time, volume_db),
             daemon=True,
         ).start()
 
@@ -54,29 +59,45 @@ class Encoder:
             except OSError:
                 pass
 
-    def _compress(self, src, dst, vbr, abr, duration, on_progress, on_status, on_done, on_finished):
+    def _compress(self, src, dst, vbr, abr, duration, on_progress, on_status,
+                  on_done, on_finished, start_time, end_time, volume_db):
         passlog = str(Path(dst).parent / "ffmpeg2pass")
         try:
+            seek = ["-ss", str(start_time)] if start_time > 0 else []
+            trim = ["-t", str(end_time - start_time)] if end_time is not None else []
+
             on_status("Pass 1 / 2  —  Analyzing…")
-            pass1 = [
-                "ffmpeg", "-y", "-i", src,
-                "-c:v", "libx264", "-b:v", f"{vbr}k",
-                "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
-                "-pass", "1", "-passlogfile", passlog,
-                "-an", "-f", "null", "NUL",
-            ]
+            pass1 = (
+                ["ffmpeg", "-y"]
+                + seek
+                + ["-i", src,
+                   "-c:v", "libx264", "-b:v", f"{vbr}k",
+                   "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
+                   "-pass", "1", "-passlogfile", passlog,
+                   "-an"]
+                + trim
+                + ["-f", "null", "NUL"]
+            )
             if not self._run_ffmpeg(pass1, duration, 0.0, 0.5, on_progress, on_status):
                 return
 
             on_status("Pass 2 / 2  —  Encoding…")
-            pass2 = [
-                "ffmpeg", "-y", "-i", src,
-                "-c:v", "libx264", "-b:v", f"{vbr}k",
-                "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
-                "-pass", "2", "-passlogfile", passlog,
-            ]
-            pass2 += ["-c:a", "aac", "-b:a", f"{abr}k"] if abr > 0 else ["-an"]
-            pass2.append(dst)
+            pass2 = (
+                ["ffmpeg", "-y"]
+                + seek
+                + ["-i", src,
+                   "-c:v", "libx264", "-b:v", f"{vbr}k",
+                   "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
+                   "-pass", "2", "-passlogfile", passlog]
+            )
+            if abr > 0:
+                pass2 += ["-c:a", "aac", "-b:a", f"{abr}k"]
+                if volume_db != 0.0:
+                    pass2 += ["-af", f"volume={volume_db:+.1f}dB"]
+            else:
+                pass2 += ["-an"]
+            pass2 += trim + [dst]
+
             if not self._run_ffmpeg(pass2, duration, 0.5, 1.0, on_progress, on_status):
                 return
 
@@ -101,7 +122,6 @@ class Encoder:
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         time_re = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
-
         for line in self._process.stderr:
             if self._cancel_flag.is_set():
                 self._process.terminate()
@@ -109,9 +129,9 @@ class Encoder:
                 return False
             m = time_re.search(line)
             if m:
-                elapsed = float(m.group(1)) * 3600 + float(m.group(2)) * 60 + float(m.group(3))
+                elapsed = (float(m.group(1)) * 3600 + float(m.group(2)) * 60
+                           + float(m.group(3)))
                 frac = min(1.0, elapsed / duration)
                 on_progress(p_start + frac * (p_end - p_start))
-
         self._process.wait()
         return self._process.returncode == 0

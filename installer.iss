@@ -1,5 +1,5 @@
 #define MyAppName "Discord Video Compressor"
-#define MyAppVersion "2.0"
+#define MyAppVersion "3.0"
 #define MyAppPublisher "matt430"
 #define MyAppExeName "DiscordVideoCompressor.exe"
 #define MyAppSourceDir "dist\DiscordVideoCompressor"
