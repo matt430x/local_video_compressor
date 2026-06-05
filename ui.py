@@ -12,6 +12,7 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 DISCORD_PRESETS = [("8 MB", 8), ("50 MB", 50), ("100 MB", 100)]
+VERSION = "v1.0"
 
 
 class CompressorApp(ctk.CTk):
@@ -36,7 +37,12 @@ class CompressorApp(ctk.CTk):
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=24, pady=20)
 
-        ctk.CTkLabel(main, text="Discord Video Compressor", font=("Segoe UI", 22, "bold")).pack(anchor="w", pady=(0, 16))
+        header_row = ctk.CTkFrame(main, fg_color="transparent")
+        header_row.pack(fill="x", pady=(0, 2))
+        ctk.CTkLabel(header_row, text="Discord Video Compressor", font=("Segoe UI", 22, "bold")).pack(side="left")
+        ctk.CTkLabel(header_row, text=VERSION, font=("Segoe UI", 12), text_color="#666").pack(side="right", anchor="s", pady=(0, 4))
+
+        ctk.CTkLabel(main, text="by matt430", font=("Segoe UI", 11), text_color="#666").pack(anchor="w", pady=(0, 14))
 
         if not ffmpeg_available():
             self._build_ffmpeg_warning(main)
