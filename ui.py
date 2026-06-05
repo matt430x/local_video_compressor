@@ -91,7 +91,8 @@ class CompressorApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.TkdndVersion = TkinterDnD._require(self)
         self.title("Discord Video Compressor")
         self.geometry("960x700")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(960, 700)
 
         self.encoder = Encoder()
         self._output_folder: Optional[str] = None
@@ -206,6 +207,8 @@ class CompressorApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _build_right_column(self, parent):
         right = ctk.CTkFrame(parent, fg_color="transparent")
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(3, weight=1)  # spacer — absorbs extra vertical space
 
         self._build_target_section(right)
         self._build_audio_section(right)
@@ -214,7 +217,7 @@ class CompressorApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _build_target_section(self, parent):
         frame = ctk.CTkFrame(parent, corner_radius=8)
-        frame.pack(fill="x", pady=(0, 10))
+        frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         ctk.CTkLabel(frame, text="Target Size", font=("Segoe UI", 13, "bold")).pack(
             anchor="w", padx=14, pady=(12, 8))
 
@@ -233,7 +236,7 @@ class CompressorApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _build_audio_section(self, parent):
         frame = ctk.CTkFrame(parent, corner_radius=8)
-        frame.pack(fill="x", pady=(0, 10))
+        frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 
         row = ctk.CTkFrame(frame, fg_color="transparent")
         row.pack(fill="x", padx=14, pady=12)
@@ -248,7 +251,7 @@ class CompressorApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _build_output_section(self, parent):
         frame = ctk.CTkFrame(parent, corner_radius=8)
-        frame.pack(fill="x", pady=(0, 10))
+        frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         ctk.CTkLabel(frame, text="Output Folder", font=("Segoe UI", 13, "bold")).pack(
             anchor="w", padx=14, pady=(12, 6))
 
@@ -263,15 +266,19 @@ class CompressorApp(ctk.CTk, TkinterDnD.DnDWrapper):
                        command=self._browse_output).pack(side="right")
 
     def _build_progress_section(self, parent):
-        self.status_label = ctk.CTkLabel(parent, text="Ready", text_color="#888", anchor="w")
-        self.status_label.pack(fill="x", pady=(4, 4))
+        progress_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        progress_frame.grid(row=4, column=0, sticky="ew")
+        progress_frame.columnconfigure(0, weight=1)
 
-        self.progress_bar = ctk.CTkProgressBar(parent)
-        self.progress_bar.pack(fill="x", pady=(0, 14))
+        self.status_label = ctk.CTkLabel(progress_frame, text="Ready", text_color="#888", anchor="w")
+        self.status_label.grid(row=0, column=0, sticky="ew", pady=(4, 4))
+
+        self.progress_bar = ctk.CTkProgressBar(progress_frame)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(0, 14))
         self.progress_bar.set(0)
 
-        btn_row = ctk.CTkFrame(parent, fg_color="transparent")
-        btn_row.pack(fill="x")
+        btn_row = ctk.CTkFrame(progress_frame, fg_color="transparent")
+        btn_row.grid(row=2, column=0, sticky="w")
 
         self.compress_btn = ctk.CTkButton(
             btn_row, text="Compress Videos", width=180, height=42,
