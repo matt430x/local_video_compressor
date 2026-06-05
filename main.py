@@ -1,5 +1,4 @@
-from ui import CompressorApp
+from ui import main
 
 if __name__ == "__main__":
-    app = CompressorApp()
-    app.mainloop()
+    main()

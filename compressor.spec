@@ -1,14 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
-datas = collect_data_files('customtkinter') + collect_data_files('tkinterdnd2')
+datas    = collect_data_files('PyQt6')
+binaries = collect_dynamic_libs('PyQt6')
+
+# libmpv-2.dll sits next to mpv.py in the venv; bundle it alongside Python modules
+binaries += [('.venv/Lib/site-packages/libmpv-2.dll', '.')]
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=['PyQt6.sip'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

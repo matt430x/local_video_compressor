@@ -1,1 +1,2 @@
-customtkinter>=5.2.0
+PyQt6>=6.6.0
+mpv>=1.0.7
