@@ -15,9 +15,9 @@ from PyQt6.QtWidgets import (
     QRadioButton, QCheckBox, QComboBox, QLineEdit, QProgressBar,
     QTabWidget, QFileDialog, QMessageBox, QButtonGroup, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal, QPoint, QRect
+from PyQt6.QtCore import Qt, QTimer, QObject, QEvent, pyqtSignal, QPoint, QRect
 from PyQt6.QtGui import (
-    QPainter, QColor, QBrush, QPalette, QFont, QKeySequence, QShortcut,
+    QPainter, QColor, QBrush, QPalette, QFont, QPen, QKeySequence, QShortcut,
     QPixmap, QPolygon,
 )
 
@@ -169,6 +169,98 @@ class Card(QFrame):
 
 
 # ---------------------------------------------------------------------------
+# Number entry — QLineEdit that redirects Space to the window shortcut
+# ---------------------------------------------------------------------------
+
+class NumberEdit(QLineEdit):
+    spacePressed = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space:
+            self.clearFocus()
+            self.spacePressed.emit()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.clearFocus()
+        else:
+            super().keyPressEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# Icon button
+# ---------------------------------------------------------------------------
+
+class IconButton(QPushButton):
+    """Flat button that paints a named vector icon via QPainter."""
+
+    def __init__(self, icon_name: str, parent=None):
+        super().__init__(parent)
+        self._icon = icon_name
+        self.setText("")
+        self.setFixedSize(36, 28)
+        self.setStyleSheet(
+            "QPushButton { background: #2c2c2c; border: 1px solid #505050;"
+            " border-radius: 5px; }"
+            "QPushButton:hover { background: #3d3d3d; border-color: #707070; }"
+            "QPushButton:pressed { background: #222; }"
+        )
+
+    def set_icon(self, name: str):
+        self._icon = name
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx, cy = self.width() // 2, self.height() // 2
+        ic = QColor("#e0e0e0")
+
+        if self._icon == "play":
+            p.setBrush(QBrush(ic))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPolygon(QPolygon([
+                QPoint(cx - 5, cy - 7),
+                QPoint(cx - 5, cy + 7),
+                QPoint(cx + 7, cy),
+            ]))
+
+        elif self._icon == "pause":
+            p.setBrush(QBrush(ic))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(cx - 6, cy - 6, 4, 12, 1.5, 1.5)
+            p.drawRoundedRect(cx + 2, cy - 6, 4, 12, 1.5, 1.5)
+
+        elif self._icon == "vol_on":
+            p.setBrush(QBrush(ic))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPolygon(QPolygon([
+                QPoint(5,  cy - 3), QPoint(10, cy - 3),
+                QPoint(15, cy - 7), QPoint(15, cy + 7),
+                QPoint(10, cy + 3), QPoint(5,  cy + 3),
+            ]))
+            pen = QPen(ic, 2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawArc(QRect(17, cy - 5,  8, 10), -60 * 16, 120 * 16)
+            p.drawArc(QRect(19, cy - 8, 12, 16), -55 * 16, 110 * 16)
+
+        elif self._icon == "vol_off":
+            p.setBrush(QBrush(ic))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPolygon(QPolygon([
+                QPoint(4,  cy - 3), QPoint(9,  cy - 3),
+                QPoint(14, cy - 7), QPoint(14, cy + 7),
+                QPoint(9,  cy + 3), QPoint(4,  cy + 3),
+            ]))
+            pen = QPen(ic, 2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.drawLine(QPoint(19, cy - 5), QPoint(27, cy + 5))
+            p.drawLine(QPoint(19, cy + 5), QPoint(27, cy - 5))
+
+
+# ---------------------------------------------------------------------------
 # Trim bar
 # ---------------------------------------------------------------------------
 
@@ -178,7 +270,7 @@ class OverviewBar(QWidget):
     seeked      = pyqtSignal(float)
 
     H    = 32
-    GRAB = 8
+    GRAB = 12
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -220,16 +312,36 @@ class OverviewBar(QWidget):
             return
         lx = self._tx(self.start_time)
         rx = self._tx(self.end_time)
-        # Inactive regions
-        p.fillRect(0,  0, lx,     h, QColor("#1a1a1a"))
-        p.fillRect(rx, 0, w - rx, h, QColor("#1a1a1a"))
-        # Active region
-        p.fillRect(lx, 0, rx - lx, h, QColor("#1e3a5f"))
-        # Trim handles
-        hc = QColor("#93c5fd")
-        p.fillRect(lx,     0, 3, h, hc)
-        p.fillRect(rx - 3, 0, 3, h, hc)
-        # Playhead
+        hw = 7  # half-width of each handle (total = 14px)
+        hc = QColor("#f59e0b")  # amber
+
+        # Dim regions outside the handles
+        if lx - hw > 0:
+            p.fillRect(0, 0, lx - hw, h, QColor(0, 0, 0, 150))
+        if rx + hw < w:
+            p.fillRect(rx + hw, 0, w - (rx + hw), h, QColor(0, 0, 0, 150))
+
+        # Top/bottom bars connecting the two handles
+        bar_h = 3
+        bar_start = lx + hw
+        bar_end   = rx - hw
+        if bar_end > bar_start:
+            p.fillRect(bar_start, 0,          bar_end - bar_start, bar_h, hc)
+            p.fillRect(bar_start, h - bar_h,  bar_end - bar_start, bar_h, hc)
+
+        # Thick amber handles
+        p.fillRect(lx - hw, 0, hw * 2, h, hc)
+        p.fillRect(rx - hw, 0, hw * 2, h, hc)
+
+        # Grip lines: 3 short white horizontal bars centered on each handle
+        gc = QColor(255, 255, 255, 200)
+        mid_y = h // 2
+        for dy in (-4, 0, 4):
+            gy = mid_y + dy
+            p.fillRect(lx - 3, gy, 6, 2, gc)
+            p.fillRect(rx - 3, gy, 6, 2, gc)
+
+        # Playhead (drawn last so it overlaps everything)
         px = self._tx(self._playhead)
         p.fillRect(px - 1, 0, 2, h, QColor("#ef4444"))
 
@@ -637,6 +749,157 @@ class AudioMeter(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Waveform view
+# ---------------------------------------------------------------------------
+
+class WaveformView(QWidget):
+    """L channel above center-line, R below; trim shading + draggable playhead."""
+    seeked = pyqtSignal(float)
+
+    _BAR_COLOR   = QColor("#22c55e")
+    _CLIP_COLOR  = QColor("#ef4444")
+    _DIM         = QColor(0, 0, 0, 130)
+    _PH_COLOR    = QColor("#ef4444")
+    _CENTER_LINE = QColor("#404040")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(70)
+        sp = self.sizePolicy()
+        sp.setVerticalPolicy(QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(sp)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._levels:     list[tuple[float, float]] = []
+        self._fps:        float                     = 30.0
+        self._duration:   float                     = 0.0
+        self._trim_start: float                     = 0.0
+        self._trim_end:   float                     = 0.0
+        self._playhead:   float                     = 0.0
+        self._volume_db:  float                     = 0.0
+        self._normalize:  bool                      = False
+        self._dragging:   bool                      = False
+        self._cache:      Optional[QPixmap]         = None
+
+    def set_clip(self, levels, fps, duration, trim_start, trim_end):
+        self._levels     = levels
+        self._fps        = fps
+        self._duration   = duration
+        self._trim_start = trim_start
+        self._trim_end   = trim_end if trim_end is not None else duration
+        self._playhead   = 0.0
+        self._cache      = None
+        self.update()
+
+    def set_playhead(self, t: float):
+        self._playhead = t
+        self.update()
+
+    def set_volume_db(self, db: float):
+        self._volume_db = db
+        self._cache     = None
+        self.update()
+
+    def set_normalize(self, enabled: bool):
+        self._normalize = enabled
+        self._cache     = None
+        self.update()
+
+    def set_trim(self, start: float, end: float):
+        self._trim_start = start
+        self._trim_end   = end
+        self.update()
+
+    def reset(self):
+        self._levels    = []
+        self._duration  = 0.0
+        self._playhead  = 0.0
+        self._volume_db = 0.0
+        self._normalize = False
+        self._cache     = None
+        self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._cache = None
+
+    def _rebuild_cache(self):
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        px = QPixmap(w, h)
+        px.fill(QColor("#1a1a1a"))
+        p = QPainter(px)
+        cy     = h // 2
+        half_h = max(1, cy - 2)
+        vol    = 10.0 ** (self._volume_db / 20.0)
+        # When normalized, simulate loudnorm: scale RMS to a fixed reference level.
+        # RMS better reflects perceived loudness than peak.
+        # Loud clips shrink noticeably; quiet clips grow significantly.
+        if self._normalize and self._levels:
+            amps = [max(la, ra) for la, ra in self._levels]
+            rms  = math.sqrt(sum(a * a for a in amps) / len(amps)) if amps else 0.0
+            if rms > 0.0:
+                vol *= min(0.25 / rms, 4.0)  # target RMS ~25%, cap 4× boost
+        for x in range(w):
+            t   = x / w * self._duration
+            idx = int(t * self._fps)
+            if not (0 <= idx < len(self._levels)):
+                continue
+            la, ra = self._levels[idx]
+            clipping = la * vol > 1.0 or ra * vol > 1.0
+            color = self._CLIP_COLOR if clipping else self._BAR_COLOR
+            lh = max(1, int(min(la * vol, 1.0) * half_h))
+            rh = max(1, int(min(ra * vol, 1.0) * half_h))
+            p.fillRect(x, cy - lh, 1, lh, color)
+            p.fillRect(x, cy,      1, rh, color)
+        p.fillRect(0, cy, w, 1, self._CENTER_LINE)
+        p.end()
+        self._cache = px
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        w, h = self.width(), self.height()
+        if not self._levels or self._duration <= 0:
+            p.fillRect(0, 0, w, h, QColor("#1a1a1a"))
+            p.setPen(QColor("#555"))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                       "Select a clip to view waveform")
+            return
+        if self._cache is None:
+            self._rebuild_cache()
+        p.drawPixmap(0, 0, self._cache)
+        # Trim dim
+        if self._trim_start > 0:
+            lx = int(self._trim_start / self._duration * w)
+            p.fillRect(0, 0, lx, h, self._DIM)
+        if self._trim_end < self._duration:
+            rx = int(self._trim_end / self._duration * w)
+            p.fillRect(rx, 0, w - rx, h, self._DIM)
+        # Playhead
+        phx = int(self._playhead / self._duration * w)
+        p.fillRect(phx - 1, 0, 2, h, self._PH_COLOR)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._duration > 0:
+            self._dragging = True
+            self._seek_to(event.position().x())
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            self._seek_to(event.position().x())
+
+    def mouseReleaseEvent(self, event):
+        self._dragging = False
+
+    def _seek_to(self, x: float):
+        t = max(0.0, min(self._duration, x / max(self.width(), 1) * self._duration))
+        self._playhead = t
+        self.update()
+        self.seeked.emit(t)
+
+
+# ---------------------------------------------------------------------------
 # Video container — holds the mpv render widget, handles 16:9 fitting
 # ---------------------------------------------------------------------------
 
@@ -706,6 +969,8 @@ class QueueRow(QFrame):
         self.trim_start    = 0.0
         self.trim_end: Optional[float] = None
         self.volume_db     = 0.0
+        self.normalize     = False
+        self.strip_audio   = False
         self.audio_levels: list[tuple[float, float]] = []
         self.analysis_fps  = 30.0
 
@@ -814,6 +1079,8 @@ class CompressorWindow(QMainWindow):
         self._queue_rows: list[QueueRow]        = []
         self._selected_row: Optional[QueueRow]  = None
         self._compressing  = False
+        self._queue_total  = 0
+        self._queue_done   = 0
         self._muted        = False
         self._paused       = False
         self._player       = None
@@ -828,10 +1095,15 @@ class CompressorWindow(QMainWindow):
         self._video_container: Optional[VideoContainer]     = None
         self._meter_strip: Optional[QWidget]               = None
         self._audio_meter: Optional[AudioMeter]            = None
-        self._pause_btn: Optional[QPushButton]             = None
-        self._mute_btn:  Optional[QPushButton]             = None
-        self._trim_bar:  Optional[OverviewBar]             = None
-        self._filmstrip: Optional[FilmstripTimeline]       = None
+        self._pause_btn: Optional[IconButton]               = None
+        self._mute_btn:  Optional[IconButton]              = None
+        self._trim_bar:    Optional[OverviewBar]           = None
+        self._filmstrip:   Optional[FilmstripTimeline]     = None
+        self._current_t:   float                           = 0.0
+        self._normalize_cb:   Optional[QCheckBox]         = None
+        self._strip_audio_cb: Optional[QCheckBox]         = None
+        self._waveform:       Optional[WaveformView]      = None
+        self._browse_btn:     Optional[QPushButton]       = None
 
         self._sig        = _Signals()
         self._mpv_bridge = _MpvBridge()
@@ -847,6 +1119,7 @@ class CompressorWindow(QMainWindow):
         self._build_ui()
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._toggle_pause)
         QTimer.singleShot(400, self._init_player)
+        QApplication.instance().installEventFilter(self)
 
     # ------------------------------------------------------------------ build
 
@@ -981,7 +1254,7 @@ class CompressorWindow(QMainWindow):
 
     def _build_preview_panel(self, layout: QHBoxLayout):
         card     = Card()
-        card.setFixedWidth(620)
+        card.setMinimumWidth(620)
         card_lay = QVBoxLayout(card)
         card_lay.setContentsMargins(14, 12, 14, 8)
         card_lay.setSpacing(6)
@@ -993,13 +1266,7 @@ class CompressorWindow(QMainWindow):
         title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         title.setStyleSheet("background: transparent;")
 
-        self._pause_btn = QPushButton("⏸")
-        self._pause_btn.setFixedSize(36, 28)
-        self._pause_btn.setStyleSheet(
-            "QPushButton { background: #2c2c2c; border: 1px solid #505050; border-radius: 5px; font-size: 14px; color: #e0e0e0; }"
-            "QPushButton:hover { background: #3d3d3d; border-color: #707070; }"
-            "QPushButton:pressed { background: #222; }"
-        )
+        self._pause_btn = IconButton("pause")
         self._pause_btn.clicked.connect(self._toggle_pause)
 
         hdr_lay.addWidget(title, 1)
@@ -1009,7 +1276,7 @@ class CompressorWindow(QMainWindow):
         self._video_container = VideoContainer()
         card_lay.addWidget(self._video_container, 1)
 
-        layout.addWidget(card)
+        layout.addWidget(card, 2)
 
     def _build_meter_strip(self, layout: QHBoxLayout):
         meter_w = AudioMeter.PAD_L + 2 * AudioMeter.CH_W + AudioMeter.CH_GAP + AudioMeter.PAD_R
@@ -1019,13 +1286,7 @@ class CompressorWindow(QMainWindow):
         card_lay.setContentsMargins(10, 12, 10, 8)
         card_lay.setSpacing(6)
 
-        self._mute_btn = QPushButton("🔊")
-        self._mute_btn.setFixedSize(36, 28)
-        self._mute_btn.setStyleSheet(
-            "QPushButton { background: #2c2c2c; border: 1px solid #505050; border-radius: 5px; font-size: 14px; color: #e0e0e0; }"
-            "QPushButton:hover { background: #3d3d3d; border-color: #707070; }"
-            "QPushButton:pressed { background: #222; }"
-        )
+        self._mute_btn = IconButton("vol_on")
         self._mute_btn.clicked.connect(self._toggle_mute)
         card_lay.addWidget(self._mute_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -1072,58 +1333,119 @@ class CompressorWindow(QMainWindow):
 
     def _build_audio_tab(self, parent: QWidget):
         lay = QVBoxLayout(parent)
-        lay.setContentsMargins(8, 12, 8, 8)
-        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        lay.setContentsMargins(8, 10, 8, 8)
+        lay.setSpacing(8)
 
-        row     = QWidget()
-        row_lay = QHBoxLayout(row)
-        row_lay.setContentsMargins(4, 0, 0, 0)
+        # ── Single horizontal control strip ───────────────────────────
+        ctrl = Card(color="#252525", radius=6)
+        ctrl.setFixedHeight(46)
+        row  = QHBoxLayout(ctrl)
+        row.setContentsMargins(16, 0, 16, 0)
+        row.setSpacing(0)
 
-        lbl = QLabel("Volume Adjustment:")
-        lbl.setStyleSheet("color: #888;")
-        lbl.setFont(QFont("Segoe UI", 12))
-        row_lay.addWidget(lbl)
-        row_lay.addSpacing(14)
+        def _sep():
+            s = QWidget()
+            s.setFixedSize(1, 20)
+            s.setStyleSheet("background: #444;")
+            return s
 
+        def _cap(text):
+            l = QLabel(text)
+            l.setStyleSheet("color: #666; font-size: 11px;")
+            return l
+
+        SLIDER_SS = (
+            "QSlider::groove:horizontal{height:4px;background:#404040;border-radius:2px;}"
+            "QSlider::sub-page:horizontal{background:#3b82f6;border-radius:2px;}"
+            "QSlider::handle:horizontal{background:#3b82f6;border-radius:6px;"
+            "width:12px;height:12px;margin:-4px 0;}"
+            "QSlider::handle:horizontal:disabled{background:#555;}"
+            "QSlider::sub-page:horizontal:disabled{background:#1e3060;}"
+        )
+
+        # Volume
+        row.addWidget(_cap("Volume"))
+        row.addSpacing(10)
         self._vol_slider = QSlider(Qt.Orientation.Horizontal)
-        self._vol_slider.setRange(-300, 300)  # tenths of dB
+        self._vol_slider.setRange(-150, 150)  # each unit = 0.2 dB  →  ±30 dB
         self._vol_slider.setValue(0)
-        self._vol_slider.setFixedWidth(220)
+        self._vol_slider.setFixedWidth(300)
         self._vol_slider.setEnabled(False)
+        self._vol_slider.setStyleSheet(SLIDER_SS)
         self._vol_slider.valueChanged.connect(self._on_volume_change)
-        row_lay.addWidget(self._vol_slider)
-        row_lay.addSpacing(12)
+        row.addWidget(self._vol_slider)
+        row.addSpacing(10)
+        self._vol_label = NumberEdit("—")
+        self._vol_label.setFixedWidth(72)
+        self._vol_label.setEnabled(False)
+        self._vol_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._vol_label.setStyleSheet(
+            "QLineEdit { background: #1e1e1e; border: 1px solid #444; border-radius: 4px;"
+            " color: #e0e0e0; font-size: 12px; padding: 0 4px; }"
+            "QLineEdit:focus { border-color: #3b82f6; }"
+            "QLineEdit:disabled { color: #555; border-color: #333; }"
+        )
+        self._vol_label.editingFinished.connect(self._on_vol_entry_edited)
+        self._vol_label.spacePressed.connect(self._toggle_pause)
+        row.addWidget(self._vol_label)
 
-        self._vol_label = QLabel("—")
-        self._vol_label.setFixedWidth(68)
-        self._vol_label.setFont(QFont("Segoe UI", 12))
-        self._vol_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row_lay.addWidget(self._vol_label)
-        row_lay.addStretch()
+        row.addSpacing(14); row.addWidget(_sep()); row.addSpacing(14)
 
-        lay.addWidget(row)
+        # Normalize
+        self._normalize_cb = QCheckBox("Normalize")
+        self._normalize_cb.setEnabled(False)
+        self._normalize_cb.toggled.connect(self._on_normalize_change)
+        row.addWidget(self._normalize_cb)
+
+        row.addSpacing(14); row.addWidget(_sep()); row.addSpacing(14)
+
+        # Bitrate (global)
+        row.addWidget(_cap("Bitrate"))
+        row.addSpacing(8)
+        self._audio_bitrate = QComboBox()
+        self._audio_bitrate.addItems(["64", "96", "128", "192"])
+        self._audio_bitrate.setCurrentText("128")
+        self._audio_bitrate.setFixedWidth(76)
+        row.addWidget(self._audio_bitrate)
+        row.addSpacing(5)
+        row.addWidget(_cap("kbps"))
+
+        row.addSpacing(14); row.addWidget(_sep()); row.addSpacing(14)
+
+        # Strip Audio
+        self._strip_audio_cb = QCheckBox("Strip Audio")
+        self._strip_audio_cb.setEnabled(False)
+        self._strip_audio_cb.toggled.connect(self._on_strip_audio_change)
+        row.addWidget(self._strip_audio_cb)
+
+        row.addStretch()
+        lay.addWidget(ctrl)
+
+        # ── Waveform fills all remaining space ─────────────────────────
+        self._waveform = WaveformView()
+        self._waveform.seeked.connect(self._on_seek)
+        lay.addWidget(self._waveform, 1)
 
     def _build_compress_tab(self, parent: QWidget):
         lay = QVBoxLayout(parent)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(6)
-        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        lay.setContentsMargins(8, 10, 8, 8)
+        lay.setSpacing(8)
 
         lbl_style = "color: #888; font-size: 12px;"
-        LW = 110
 
         def _lbl(text):
             l = QLabel(text)
             l.setStyleSheet(lbl_style)
-            l.setFixedWidth(LW)
             return l
 
-        # Target size
-        r1     = QWidget()
-        r1_lay = QHBoxLayout(r1)
-        r1_lay.setContentsMargins(4, 0, 0, 0)
-        r1_lay.addWidget(_lbl("Target Size:"))
+        # ---- Single top row: target size | separator | output folder ----
+        top = QWidget()
+        top.setFixedHeight(34)
+        top_lay = QHBoxLayout(top)
+        top_lay.setContentsMargins(4, 0, 4, 0)
+        top_lay.setSpacing(6)
 
+        top_lay.addWidget(_lbl("Target Size:"))
         self._target_group = QButtonGroup(self)
         self._preset_btns: dict[int, QRadioButton] = {}
         for label, mb in DISCORD_PRESETS:
@@ -1131,90 +1453,55 @@ class CompressorWindow(QMainWindow):
             rb.setProperty("mb_value", mb)
             self._target_group.addButton(rb)
             self._preset_btns[mb] = rb
-            r1_lay.addWidget(rb)
+            top_lay.addWidget(rb)
         self._preset_btns[8].setChecked(True)
 
         self._custom_rb = QRadioButton("Custom:")
         self._custom_rb.toggled.connect(self._on_target_change)
         self._target_group.addButton(self._custom_rb)
-        r1_lay.addWidget(self._custom_rb)
+        top_lay.addWidget(self._custom_rb)
 
         self._custom_entry = QLineEdit()
         self._custom_entry.setPlaceholderText("MB")
-        self._custom_entry.setFixedWidth(60)
+        self._custom_entry.setFixedWidth(52)
         self._custom_entry.setEnabled(False)
-        r1_lay.addWidget(self._custom_entry)
-        r1_lay.addStretch()
-        lay.addWidget(r1)
+        top_lay.addWidget(self._custom_entry)
 
-        # Audio
-        r2     = QWidget()
-        r2_lay = QHBoxLayout(r2)
-        r2_lay.setContentsMargins(4, 0, 0, 0)
-        r2_lay.addWidget(_lbl("Audio:"))
+        top_lay.addSpacing(12)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #444;")
+        top_lay.addWidget(sep)
+        top_lay.addSpacing(12)
 
-        self._audio_cb = QCheckBox("Include Audio")
-        self._audio_cb.setChecked(True)
-        r2_lay.addWidget(self._audio_cb)
-        r2_lay.addSpacing(18)
-
-        br_lbl = QLabel("Bitrate:")
-        br_lbl.setStyleSheet("color: #888;")
-        r2_lay.addWidget(br_lbl)
-        r2_lay.addSpacing(8)
-
-        self._audio_bitrate = QComboBox()
-        self._audio_bitrate.addItems(["64", "96", "128", "192"])
-        self._audio_bitrate.setCurrentText("128")
-        self._audio_bitrate.setFixedWidth(90)
-        r2_lay.addWidget(self._audio_bitrate)
-
-        kbps_lbl = QLabel("kbps")
-        kbps_lbl.setStyleSheet("color: #888;")
-        r2_lay.addWidget(kbps_lbl)
-        r2_lay.addStretch()
-        lay.addWidget(r2)
-
-        # Output folder
-        r3     = QWidget()
-        r3_lay = QHBoxLayout(r3)
-        r3_lay.setContentsMargins(4, 0, 0, 0)
-        r3_lay.addWidget(_lbl("Output Folder:"))
-
+        top_lay.addWidget(_lbl("Output:"))
         self._output_entry = QLineEdit()
         self._output_entry.setPlaceholderText("Select output folder…")
         self._output_entry.setReadOnly(True)
-        r3_lay.addWidget(self._output_entry, 1)
+        top_lay.addWidget(self._output_entry, 1)
 
-        browse_btn = QPushButton("Browse")
-        browse_btn.setFixedSize(80, 30)
-        browse_btn.clicked.connect(self._browse_output)
-        r3_lay.addWidget(browse_btn)
-        lay.addWidget(r3)
+        self._browse_btn = QPushButton("Browse")
+        self._browse_btn.setFixedSize(72, 28)
+        self._browse_btn.clicked.connect(self._browse_output)
+        top_lay.addWidget(self._browse_btn)
 
-        # Progress + buttons
-        r4     = QWidget()
-        r4_lay = QVBoxLayout(r4)
-        r4_lay.setContentsMargins(LW + 4, 0, 8, 0)
-        r4_lay.setSpacing(4)
+        lay.addWidget(top)
 
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("color: #888;")
-        r4_lay.addWidget(self.status_label)
+        # ---- Action card fills the remaining space ----
+        action = Card(color="#252525", radius=6)
+        action_lay = QVBoxLayout(action)
+        action_lay.setContentsMargins(16, 14, 16, 14)
+        action_lay.setSpacing(12)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 1000)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(8)
-        r4_lay.addWidget(self.progress_bar)
+        action_lay.addStretch(1)
 
         btn_row = QWidget()
         btn_lay = QHBoxLayout(btn_row)
-        btn_lay.setContentsMargins(0, 4, 0, 0)
+        btn_lay.setContentsMargins(0, 0, 0, 0)
         btn_lay.setSpacing(10)
 
         self.compress_btn = QPushButton("Compress Videos")
-        self.compress_btn.setFixedHeight(38)
+        self.compress_btn.setFixedHeight(44)
         self.compress_btn.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         self.compress_btn.setStyleSheet(
             "QPushButton { background: #3b82f6; color: white; border-radius: 6px; padding: 0 16px; }"
@@ -1224,16 +1511,28 @@ class CompressorWindow(QMainWindow):
         self.compress_btn.clicked.connect(self._start_queue)
 
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setFixedSize(90, 38)
+        self.cancel_btn.setFixedSize(90, 44)
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel)
 
-        btn_lay.addWidget(self.compress_btn)
+        btn_lay.addWidget(self.compress_btn, 1)
         btn_lay.addWidget(self.cancel_btn)
-        btn_lay.addStretch()
-        r4_lay.addWidget(btn_row)
-        lay.addWidget(r4)
-        lay.addStretch()
+        action_lay.addWidget(btn_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFixedHeight(10)
+        self.progress_bar.setTextVisible(False)
+        action_lay.addWidget(self.progress_bar)
+
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet("color: #888; font-size: 12px;")
+        action_lay.addWidget(self.status_label)
+
+        action_lay.addStretch(1)
+
+        lay.addWidget(action, 1)
 
     # ------------------------------------------------------------------ mpv
 
@@ -1246,6 +1545,7 @@ class CompressorWindow(QMainWindow):
             self._player = mpv.MPV(
                 keep_open=True, idle=True, loop_file='inf',
                 osc=False, osd_level=0, log_handler=print, loglevel='warn',
+                volume_max=1000,  # allows up to +20 dB (mpv hard ceiling is 1000)
             )
             self._player['wid'] = str(wid)
             self._player.observe_property("time-pos", self._on_mpv_time_pos)
@@ -1280,6 +1580,14 @@ class CompressorWindow(QMainWindow):
                 ))
             proc.wait()
             row.audio_levels = levels
+            # If this clip is currently selected, refresh the waveform now
+            if self._waveform and self._selected_row is row and row.info:
+                dur = row.info.duration
+                end = row.trim_end if row.trim_end is not None else dur
+                self._waveform.set_clip(
+                    levels, row.analysis_fps, dur, row.trim_start, end)
+                self._waveform.set_volume_db(row.volume_db)
+                self._waveform.set_normalize(row.normalize)
         except Exception as e:
             print(f"audio analysis error: {e}")
 
@@ -1298,15 +1606,19 @@ class CompressorWindow(QMainWindow):
                 pass
 
     def _on_playhead_update(self, t: float):
+        self._current_t = t
         self._trim_bar.set_playhead(t)
         if self._filmstrip:
             self._filmstrip.set_playhead(t)
+        if self._waveform:
+            self._waveform.set_playhead(t)
         if self._audio_meter and self._selected_row:
             lvs = self._selected_row.audio_levels
             idx = int(t * self._selected_row.analysis_fps)
             if lvs and 0 <= idx < len(lvs):
-                db_l = 20 * math.log10(max(lvs[idx][0], 1e-10))
-                db_r = 20 * math.log10(max(lvs[idx][1], 1e-10))
+                vol  = self._selected_row.volume_db
+                db_l = 20 * math.log10(max(lvs[idx][0], 1e-10)) + vol
+                db_r = 20 * math.log10(max(lvs[idx][1], 1e-10)) + vol
                 def norm(db): return max(0.0, min(1.0, (db + 60) / 60))
                 self._audio_meter.update_levels([norm(db_l), norm(db_r)])
             else:
@@ -1315,9 +1627,16 @@ class CompressorWindow(QMainWindow):
     def _on_pause_update(self, paused: bool):
         self._paused = paused
         if self._pause_btn:
-            self._pause_btn.setText("▶" if paused else "⏸")
+            self._pause_btn.set_icon("play" if paused else "pause")
         if paused and self._audio_meter:
             self._audio_meter.silence()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            fw = self.focusWidget()
+            if isinstance(fw, QLineEdit) and fw is not obj:
+                fw.clearFocus()
+        return False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1356,7 +1675,7 @@ class CompressorWindow(QMainWindow):
     def _toggle_mute(self):
         self._muted = not self._muted
         if self._mute_btn:
-            self._mute_btn.setText("🔇" if self._muted else "🔊")
+            self._mute_btn.set_icon("vol_off" if self._muted else "vol_on")
         if self._player:
             try:
                 self._player.mute = self._muted
@@ -1369,7 +1688,7 @@ class CompressorWindow(QMainWindow):
         try:
             self._paused = False
             if self._pause_btn:
-                self._pause_btn.setText("⏸")
+                self._pause_btn.set_icon("pause")
             self._player.ab_loop_a = 'no'
             self._player.ab_loop_b = 'no'
             self._player.command('loadfile', row.path)
@@ -1406,6 +1725,8 @@ class CompressorWindow(QMainWindow):
             self._selected_row.trim_end   = end
         if self._filmstrip:
             self._filmstrip.set_trim(start, end)
+        if self._waveform:
+            self._waveform.set_trim(start, end)
         if self._player:
             try:
                 self._player.ab_loop_a = start
@@ -1424,18 +1745,102 @@ class CompressorWindow(QMainWindow):
                 pass
 
     def _on_volume_change(self, value: int):
-        db   = value / 10.0
+        db   = value / 5.0
         sign = "+" if db > 0 else ""
         self._vol_label.setText(f"{sign}{db:.1f} dB")
         if self._selected_row:
             self._selected_row.volume_db = db
+        if self._player:
+            try:
+                self._player.volume = min(1000.0, 100.0 * (10.0 ** (db * 0.3 / 20.0)))
+            except Exception:
+                pass
+        # Push immediate meter update (doesn't wait for next time-pos tick)
+        if self._audio_meter and self._selected_row:
+            row = self._selected_row
+            lvs = row.audio_levels
+            idx = int(self._current_t * row.analysis_fps)
+            if lvs and 0 <= idx < len(lvs):
+                db_l = 20 * math.log10(max(lvs[idx][0], 1e-10)) + db
+                db_r = 20 * math.log10(max(lvs[idx][1], 1e-10)) + db
+                def norm(x): return max(0.0, min(1.0, (x + 60) / 60))
+                self._audio_meter.update_levels([norm(db_l), norm(db_r)])
+        if self._waveform:
+            self._waveform.set_volume_db(db)
+
+    def _on_vol_entry_edited(self):
+        text = self._vol_label.text().replace("dB", "").replace(" ", "").strip()
+        try:
+            db = max(-30.0, min(30.0, float(text)))
+        except ValueError:
+            db = self._vol_slider.value() / 5.0
+        self._vol_slider.setValue(int(round(db * 5)))
+
+    def _on_normalize_change(self, checked: bool):
+        if self._selected_row:
+            self._selected_row.normalize = checked
+        if self._waveform:
+            self._waveform.set_normalize(checked)
+
+    def _on_strip_audio_change(self, checked: bool):
+        if self._selected_row:
+            self._selected_row.strip_audio = checked
+        # Toggle dependent controls
+        self._vol_slider.setEnabled(not checked)
+        self._vol_label.setEnabled(not checked)
+        self._vol_label.setText("—" if checked else self._vol_label.text())
+        if self._normalize_cb:
+            self._normalize_cb.setEnabled(not checked)
+        if self._player:
+            try:
+                if checked:
+                    self._player.volume = 0.0
+                elif self._selected_row:
+                    self._player.volume = min(1000.0,
+                        100.0 * (10.0 ** (self._selected_row.volume_db * 0.3 / 20.0)))
+            except Exception:
+                pass
 
     def _load_middle(self, row: QueueRow):
-        self._vol_slider.setEnabled(True)
-        self._vol_slider.setValue(int(row.volume_db * 10))
+        stripped = row.strip_audio
+        # Block signals on checkboxes while loading so their handlers don't
+        # fire side-effects (e.g. _on_strip_audio_change re-enabling the slider).
+        if self._normalize_cb:
+            self._normalize_cb.blockSignals(True)
+            self._normalize_cb.setChecked(row.normalize)
+            self._normalize_cb.blockSignals(False)
+            self._normalize_cb.setEnabled(not stripped)
+        if self._strip_audio_cb:
+            self._strip_audio_cb.blockSignals(True)
+            self._strip_audio_cb.setChecked(stripped)
+            self._strip_audio_cb.blockSignals(False)
+            self._strip_audio_cb.setEnabled(True)
+        # Block slider signals too — setValue fires valueChanged which would
+        # overwrite row.volume_db with a rounded value before we've restored it.
+        self._vol_slider.blockSignals(True)
+        self._vol_slider.setValue(int(round(row.volume_db * 5)))
+        self._vol_slider.blockSignals(False)
+        self._vol_slider.setEnabled(not stripped)
+        self._vol_label.setEnabled(not stripped)
         db   = round(row.volume_db, 1)
         sign = "+" if db > 0 else ""
-        self._vol_label.setText(f"{sign}{db:.1f} dB")
+        self._vol_label.setText(f"{sign}{db:.1f} dB" if not stripped else "—")
+        if self._player:
+            try:
+                self._player.volume = min(1000.0, 100.0 * (10.0 ** (row.volume_db * 0.3 / 20.0)))
+            except Exception:
+                pass
+
+        if self._waveform:
+            if row.info and row.audio_levels:
+                dur = row.info.duration
+                end = row.trim_end if row.trim_end is not None else dur
+                self._waveform.set_clip(
+                    row.audio_levels, row.analysis_fps, dur, row.trim_start, end)
+                self._waveform.set_volume_db(row.volume_db)
+                self._waveform.set_normalize(row.normalize)
+            else:
+                self._waveform.reset()
 
         if row.info:
             dur = row.info.duration
@@ -1450,15 +1855,30 @@ class CompressorWindow(QMainWindow):
         self._load_video(row)
 
     def _clear_middle(self):
-        self._vol_slider.setEnabled(False)
+        self._vol_slider.blockSignals(True)
         self._vol_slider.setValue(0)
+        self._vol_slider.blockSignals(False)
+        self._vol_slider.setEnabled(False)
+        self._vol_label.setEnabled(False)
         self._vol_label.setText("—")
+        if self._normalize_cb:
+            self._normalize_cb.blockSignals(True)
+            self._normalize_cb.setChecked(False)
+            self._normalize_cb.blockSignals(False)
+            self._normalize_cb.setEnabled(False)
+        if self._strip_audio_cb:
+            self._strip_audio_cb.blockSignals(True)
+            self._strip_audio_cb.setChecked(False)
+            self._strip_audio_cb.blockSignals(False)
+            self._strip_audio_cb.setEnabled(False)
+        if self._waveform:
+            self._waveform.reset()
         self._trim_bar.reset()
         if self._filmstrip:
             self._filmstrip.reset()
         self._paused = False
         if self._pause_btn:
-            self._pause_btn.setText("⏸")
+            self._pause_btn.set_icon("pause")
         if self._audio_meter:
             self._audio_meter.silence()
         if self._player:
@@ -1595,6 +2015,26 @@ class CompressorWindow(QMainWindow):
                 return f"_{int(btn.property('mb_value'))}mb"
         return "_compressed"
 
+    def _set_queue_controls_enabled(self, enabled: bool):
+        """Enable/disable settings that must not change during compression."""
+        for btn in self._preset_btns.values():
+            btn.setEnabled(enabled)
+        self._custom_rb.setEnabled(enabled)
+        self._custom_entry.setEnabled(enabled and self._custom_rb.isChecked())
+        self._output_entry.setEnabled(enabled)
+        if self._browse_btn:
+            self._browse_btn.setEnabled(enabled)
+        self._audio_bitrate.setEnabled(enabled)
+        # Per-clip controls — honour strip_audio state when re-enabling
+        row = self._selected_row
+        strip = row.strip_audio if row else True
+        self._vol_slider.setEnabled(enabled and not strip)
+        self._vol_label.setEnabled(enabled and not strip)
+        if self._normalize_cb:
+            self._normalize_cb.setEnabled(enabled and not strip)
+        if self._strip_audio_cb:
+            self._strip_audio_cb.setEnabled(enabled and row is not None)
+
     def _start_queue(self):
         pending = [r for r in self._queue_rows if r.status == "Ready"]
         if not pending:
@@ -1606,7 +2046,10 @@ class CompressorWindow(QMainWindow):
         if not self._output_folder:
             QMessageBox.warning(self, "No Output Folder", "Please select an output folder.")
             return
-        self._compressing = True
+        self._compressing  = True
+        self._queue_total  = len(pending)
+        self._queue_done   = 0
+        self._set_queue_controls_enabled(False)
         self.compress_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.progress_bar.setValue(0)
@@ -1622,7 +2065,6 @@ class CompressorWindow(QMainWindow):
             return
         row = pending[0]
         row.status = "Compressing"
-        self.progress_bar.setValue(0)
 
         if row.info is None:
             sig = self._sig
@@ -1640,7 +2082,7 @@ class CompressorWindow(QMainWindow):
 
     def _run_compression(self, row: QueueRow):
         target_mb     = self._get_target_mb()
-        include_audio = self._audio_cb.isChecked()
+        include_audio = not row.strip_audio
         audio_kbps    = int(self._audio_bitrate.currentText())
         start_time    = row.trim_start
         end_time      = row.trim_end
@@ -1670,17 +2112,28 @@ class CompressorWindow(QMainWindow):
             start_time=start_time,
             end_time=end_time,
             volume_db=row.volume_db,
+            normalize=row.normalize,
         )
 
     def _on_compress_progress(self, p: float):
-        self.progress_bar.setValue(int(p * 1000))
+        if self._queue_total > 0:
+            global_p = (self._queue_done + p) / self._queue_total
+        else:
+            global_p = p
+        self.progress_bar.setValue(int(global_p * 1000))
 
     def _on_compress_status(self, s: str):
-        self.status_label.setText(s)
+        if self._queue_total > 1:
+            self.status_label.setText(
+                f"[{self._queue_done + 1}/{self._queue_total}]  {s}"
+            )
+        else:
+            self.status_label.setText(s)
 
     def _on_compress_row_done(self, row: QueueRow):
         row.status = "Done"
-        self.progress_bar.setValue(1000)
+        self._queue_done += 1
+        self.progress_bar.setValue(int(self._queue_done / max(1, self._queue_total) * 1000))
 
     def _cancel(self):
         self._compressing = False
@@ -1688,9 +2141,13 @@ class CompressorWindow(QMainWindow):
         for r in self._queue_rows:
             if r.status == "Compressing":
                 r.status = "Cancelled"
+        self._set_queue_controls_enabled(True)
+        self.compress_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
 
     def _on_queue_done(self):
         self._compressing = False
+        self._set_queue_controls_enabled(True)
         self.compress_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         done  = sum(1 for r in self._queue_rows if r.status == "Done")

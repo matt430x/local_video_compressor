@@ -42,12 +42,13 @@ class Encoder:
         start_time: float = 0.0,
         end_time: Optional[float] = None,
         volume_db: float = 0.0,
+        normalize: bool = False,
     ):
         self._cancel_flag.clear()
         threading.Thread(
             target=self._compress,
             args=(src, dst, vbr, abr, duration, on_progress, on_status, on_done,
-                  on_finished, start_time, end_time, volume_db),
+                  on_finished, start_time, end_time, volume_db, normalize),
             daemon=True,
         ).start()
 
@@ -60,7 +61,7 @@ class Encoder:
                 pass
 
     def _compress(self, src, dst, vbr, abr, duration, on_progress, on_status,
-                  on_done, on_finished, start_time, end_time, volume_db):
+                  on_done, on_finished, start_time, end_time, volume_db, normalize):
         passlog = str(Path(dst).parent / "ffmpeg2pass")
         try:
             seek = ["-ss", str(start_time)] if start_time > 0 else []
@@ -92,11 +93,17 @@ class Encoder:
             )
             if abr > 0:
                 pass2 += ["-c:a", "aac", "-b:a", f"{abr}k"]
+                filters = []
+                if normalize:
+                    filters.append("loudnorm")
                 if volume_db != 0.0:
-                    pass2 += ["-af", f"volume={volume_db:+.1f}dB"]
+                    filters.append(f"volume={volume_db:.1f}dB")
+                if filters:
+                    pass2 += ["-af", ",".join(filters)]
             else:
                 pass2 += ["-an"]
             pass2 += trim + [dst]
+            print(f"[encoder] pass2: {' '.join(pass2)}", flush=True)
 
             if not self._run_ffmpeg(pass2, duration, 0.5, 1.0, on_progress, on_status):
                 return
