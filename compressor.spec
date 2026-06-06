@@ -7,6 +7,9 @@ binaries = collect_dynamic_libs('PyQt6')
 # libmpv-2.dll sits next to mpv.py in the venv; bundle it alongside Python modules
 binaries += [('.venv/Lib/site-packages/libmpv-2.dll', '.')]
 
+# Bundled ffmpeg so users need no external dependency
+binaries += [('ffmpeg_bin/ffmpeg.exe', '.'), ('ffmpeg_bin/ffprobe.exe', '.')]
+
 a = Analysis(
     ['main.py'],
     pathex=[],

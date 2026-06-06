@@ -1,6 +1,7 @@
 import subprocess
 import json
 from dataclasses import dataclass
+from ff_paths import FFPROBE
 
 
 @dataclass
@@ -16,7 +17,7 @@ class VideoInfo:
 
 def probe_video(path: str) -> VideoInfo:
     cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
+        FFPROBE, "-v", "quiet", "-print_format", "json",
         "-show_streams", "-show_format", path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)

@@ -29,6 +29,7 @@ except Exception:
 
 from video import VideoInfo, probe_video
 from encoder import Encoder, ffmpeg_available, calculate_video_bitrate
+from ff_paths import FFMPEG
 
 VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v", ".ts"}
 DISCORD_PRESETS = [("8 MB", 8), ("50 MB", 50), ("100 MB", 100)]
@@ -451,7 +452,7 @@ class FilmstripTimeline(QWidget):
         interval = max(0.1, duration / count)
         pattern  = os.path.join(tempdir, "t%04d.jpg")
         cmd = [
-            "ffmpeg", "-i", path,
+            FFMPEG, "-i", path,
             "-vf", (f"fps=1/{interval:.4f},"
                     "scale=320:180:force_original_aspect_ratio=decrease,"
                     "pad=320:180:(ow-iw)/2:(oh-ih)/2,setsar=1"),
@@ -1561,7 +1562,7 @@ class CompressorWindow(QMainWindow):
         row.analysis_fps = fps
         CHUNK       = max(1, int(RATE / fps))
         CHUNK_BYTES = CHUNK * CHANNELS * 2
-        cmd = ["ffmpeg", "-y", "-i", row.path,
+        cmd = [FFMPEG, "-y", "-i", row.path,
                "-vn", "-ar", str(RATE), "-ac", str(CHANNELS),
                "-f", "s16le", "pipe:1"]
         try:

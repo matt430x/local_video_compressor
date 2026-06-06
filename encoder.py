@@ -4,11 +4,12 @@ import re
 import os
 from pathlib import Path
 from typing import Callable, Optional
+from ff_paths import FFMPEG, FFPROBE
 
 
 def ffmpeg_available() -> bool:
     try:
-        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True,
+        subprocess.run([FFPROBE, "-version"], capture_output=True, check=True,
                        creationflags=subprocess.CREATE_NO_WINDOW)
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
@@ -69,7 +70,7 @@ class Encoder:
 
             on_status("Pass 1 / 2  —  Analyzing…")
             pass1 = (
-                ["ffmpeg", "-y"]
+                [FFMPEG, "-y"]
                 + seek
                 + ["-i", src,
                    "-c:v", "libx264", "-b:v", f"{vbr}k",
@@ -84,7 +85,7 @@ class Encoder:
 
             on_status("Pass 2 / 2  —  Encoding…")
             pass2 = (
-                ["ffmpeg", "-y"]
+                [FFMPEG, "-y"]
                 + seek
                 + ["-i", src,
                    "-c:v", "libx264", "-b:v", f"{vbr}k",
